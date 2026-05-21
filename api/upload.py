@@ -6,8 +6,9 @@ from __future__ import annotations
 import logging
 import uuid
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
+from api.auth import require_api_key
 from schemas import JobStatus
 from tasks.process_document import job_manager
 
@@ -20,6 +21,7 @@ async def upload_file(
     file: UploadFile = File(...),
     process_type: str = Form("auto"),
     use_ocr: bool = Form(False),
+    _key: None = Depends(require_api_key),
 ):
     content = await file.read()
     if len(content) == 0:

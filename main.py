@@ -4,14 +4,20 @@ FastAPI main entry point for 03-ai-document-audio-processor.
 from __future__ import annotations
 
 import logging
+import traceback
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Security, UploadFile
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
+
+from api.auth import require_api_key
+
+MAX_UPLOAD_SIZE = 50 * 1024 * 1024  # 50 MB
 
 limiter = Limiter(key_func=get_remote_address)
 
@@ -21,7 +27,6 @@ def _rate_limit_exceeded_handler(request, exc):
         status_code=429,
         content={"detail": "Rate limit exceeded. Please try again later."},
     )
-from api.upload import router as upload_router @@
 from api.upload import router as upload_router
 from api.status import router as status_router
 from config import Config
@@ -43,6 +48,24 @@ def create_app() -> FastAPI:
     app.state.limiter = limiter
     app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
     app.add_middleware(SlowAPIMiddleware)
+
+    # CORS
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:3000", "http://localhost:8501"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    # Global exception handler — return JSON instead of tracebacks
+    @app.exception_handler(Exception)
+    async def global_exception_handler(request: Request, exc: Exception):
+        logger.error("Unhandled exception: %s", traceback.format_exc())
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Internal server error"},
+        )
 
     pdf_processor = PdfProcessor(upload_dir=config.upload_dir)
     ocr_processor = OcrProcessor(upload_dir=config.upload_dir)
@@ -72,13 +95,27 @@ def create_app() -> FastAPI:
     app.include_router(status_router)
 
     @app.post("/process/document", response_model=DocumentResult)
+    @limiter.limit("30/minute")
     async def process_document(
         request: Request,
         file: UploadFile = File(...),
         use_ocr: bool = Form(False),
         _key: None = Depends(require_api_key),
     ):
+        # Reject files larger than 50 MB before reading into memory
+        file_size = 0
+        chunk = await file.read(8192)
+        while chunk:
+            file_size += len(chunk)
+            if file_size > MAX_UPLOAD_SIZE:
+                raise HTTPException(
+                    status_code=413,
+                    detail="File too large. Maximum size is 50 MB.",
+                )
+            chunk = await file.read(8192)
+        await file.seek(0)
         content = await file.read()
+
         filename = file.filename or "unnamed"
         suffix = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
 
@@ -98,21 +135,51 @@ def create_app() -> FastAPI:
         return result
 
     @app.post("/process/audio", response_model=AudioResult)
+    @limiter.limit("30/minute")
     async def process_audio(
+        request: Request,
         file: UploadFile = File(...),
         _key: None = Depends(require_api_key),
     ):
+        # Reject files larger than 50 MB before reading into memory
+        file_size = 0
+        chunk = await file.read(8192)
+        while chunk:
+            file_size += len(chunk)
+            if file_size > MAX_UPLOAD_SIZE:
+                raise HTTPException(
+                    status_code=413,
+                    detail="File too large. Maximum size is 50 MB.",
+                )
+            chunk = await file.read(8192)
+        await file.seek(0)
         content = await file.read()
+
         filename = file.filename or "unnamed"
         result = await audio_processor.transcribe(filename, content)
         return result
 
     @app.post("/process/extract")
+    @limiter.limit("30/minute")
     async def extract_fields(
+        request: Request,
         file: UploadFile = File(...),
         _key: None = Depends(require_api_key),
     ):
+        # Reject files larger than 50 MB before reading into memory
+        file_size = 0
+        chunk = await file.read(8192)
+        while chunk:
+            file_size += len(chunk)
+            if file_size > MAX_UPLOAD_SIZE:
+                raise HTTPException(
+                    status_code=413,
+                    detail="File too large. Maximum size is 50 MB.",
+                )
+            chunk = await file.read(8192)
+        await file.seek(0)
         content = await file.read()
+
         filename = file.filename or "unnamed"
         text = content.decode("utf-8", errors="replace")
 

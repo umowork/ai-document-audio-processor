@@ -5,9 +5,10 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 
+from api.auth import require_api_key
 from schemas import JobStatus
 from tasks.process_document import job_manager
 
@@ -16,7 +17,10 @@ router = APIRouter()
 
 
 @router.get("/status/{job_id}", response_model=JobStatus)
-async def get_status(job_id: str):
+async def get_status(
+    job_id: str,
+    _key: None = Depends(require_api_key),
+):
     status = job_manager.get_status(job_id)
     if status is None:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -24,7 +28,10 @@ async def get_status(job_id: str):
 
 
 @router.get("/download/{job_id}")
-async def download_result(job_id: str):
+async def download_result(
+    job_id: str,
+    _key: None = Depends(require_api_key),
+):
     status = job_manager.get_status(job_id)
     if status is None:
         raise HTTPException(status_code=404, detail="Job not found")

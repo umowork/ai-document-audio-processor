@@ -23,7 +23,12 @@ class OcrProcessor:
         import pypdfium2 as pdfium
         import pytesseract
 
-        filepath = os.path.join(self.upload_dir, filename)
+        safe_name = os.path.basename(filename)
+        filepath = os.path.join(self.upload_dir, safe_name)
+        real_upload = os.path.realpath(self.upload_dir)
+        real_file = os.path.realpath(filepath)
+        if not real_file.startswith(real_upload + os.sep) and real_file != real_upload:
+            raise ValueError("Path traversal detected")
         with open(filepath, "wb") as f:
             f.write(content)
 
@@ -53,7 +58,12 @@ class OcrProcessor:
         import pytesseract
         from PIL import Image
 
-        filepath = os.path.join(self.upload_dir, filename)
+        safe_name = os.path.basename(filename)
+        filepath = os.path.join(self.upload_dir, safe_name)
+        real_upload = os.path.realpath(self.upload_dir)
+        real_file = os.path.realpath(filepath)
+        if not real_file.startswith(real_upload + os.sep) and real_file != real_upload:
+            raise ValueError("Path traversal detected")
         with open(filepath, "wb") as f:
             f.write(content)
 
