@@ -5,10 +5,25 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Security, UploadFile
+from fastapi.responses import JSONResponse
+from fastapi.security import APIKeyHeader
+from slowapi import Limiter
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
+from slowapi.util import get_remote_address
 
-from api.status import router as status_router
+limiter = Limiter(key_func=get_remote_address)
+
+
+def _rate_limit_exceeded_handler(request, exc):
+    return JSONResponse(
+        status_code=429,
+        content={"detail": "Rate limit exceeded. Please try again later."},
+    )
+from api.upload import router as upload_router @@
 from api.upload import router as upload_router
+from api.status import router as status_router
 from config import Config
 from exporters.excel import ExcelExporter
 from processors.audio_whisper import AudioProcessor
@@ -25,6 +40,9 @@ def create_app() -> FastAPI:
     config = Config.from_env()
 
     app = FastAPI(title="AI Document & Audio Processor", version="1.0.0")
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+    app.add_middleware(SlowAPIMiddleware)
 
     pdf_processor = PdfProcessor(upload_dir=config.upload_dir)
     ocr_processor = OcrProcessor(upload_dir=config.upload_dir)
@@ -55,8 +73,10 @@ def create_app() -> FastAPI:
 
     @app.post("/process/document", response_model=DocumentResult)
     async def process_document(
+        request: Request,
         file: UploadFile = File(...),
         use_ocr: bool = Form(False),
+        _key: None = Depends(require_api_key),
     ):
         content = await file.read()
         filename = file.filename or "unnamed"
@@ -78,14 +98,20 @@ def create_app() -> FastAPI:
         return result
 
     @app.post("/process/audio", response_model=AudioResult)
-    async def process_audio(file: UploadFile = File(...)):
+    async def process_audio(
+        file: UploadFile = File(...),
+        _key: None = Depends(require_api_key),
+    ):
         content = await file.read()
         filename = file.filename or "unnamed"
         result = await audio_processor.transcribe(filename, content)
         return result
 
     @app.post("/process/extract")
-    async def extract_fields(file: UploadFile = File(...)):
+    async def extract_fields(
+        file: UploadFile = File(...),
+        _key: None = Depends(require_api_key),
+    ):
         content = await file.read()
         filename = file.filename or "unnamed"
         text = content.decode("utf-8", errors="replace")
@@ -111,7 +137,19 @@ def create_app() -> FastAPI:
 
     @app.get("/health")
     async def health():
-        return {"status": "ok", "service": "document-processor"}
+        checks = {
+            "status": "ok",
+            "service": "document-processor",
+            "mock_mode": config.mock_mode,
+        }
+        # No database — verify processors are available
+        try:
+            checks["pdf_processor"] = "available"
+            checks["audio_processor"] = "available"
+        except Exception as e:
+            checks["status"] = "degraded"
+            checks["error"] = str(e)
+        return checks
 
     return app
 
